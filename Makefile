@@ -55,8 +55,10 @@ install: ## Install dependencies (composer + npm)
 	$(PHP_COMPOSER) install
 	$(NPM_EXEC) install
 
-setup: start install build migrate
-	$(DOCKER_COMPOSE) restart app worker
+setup: start install
+	$(DOCKER_COMPOSE) restart app
+	$(MAKE) build migrate db-seed
+	$(DOCKER_COMPOSE) restart worker
 
 start: ## Start development server (all services: php, queue, mysql, postgres)
 	$(DOCKER_COMPOSE) up -d

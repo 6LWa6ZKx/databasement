@@ -19,6 +19,12 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
+        if (User::where('email', 'admin@example.com')->exists()) {
+            $this->command?->info('Database already seeded, skipping.');
+
+            return;
+        }
+
         // Default organization
         $defaultOrg = Organization::firstOrCreate(
             ['is_default' => true],
