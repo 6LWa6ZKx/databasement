@@ -217,7 +217,6 @@ class MysqlDatabase implements DatabaseInterface
         }
 
         try {
-            logger()->debug('VAMOS');
             $statement = $this->createPdo()->query('SELECT VERSION()');
             $version = $statement === false ? false : $statement->fetchColumn();
         } catch (\PDOException) {
