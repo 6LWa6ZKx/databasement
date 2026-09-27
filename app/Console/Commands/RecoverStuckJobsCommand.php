@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\AgentJobType;
 use App\Enums\BackupJobStatus;
 use App\Facades\AppConfig;
 use App\Models\AgentJob;
@@ -9,6 +10,7 @@ use App\Models\BackupJob;
 use App\Support\QueueTimeouts;
 use Illuminate\Console\Command;
 use RuntimeException;
+use Throwable;
 
 class RecoverStuckJobsCommand extends Command
 {
@@ -58,9 +60,11 @@ class RecoverStuckJobsCommand extends Command
                 $errorMessage = "Max attempts ({$job->max_attempts}) exceeded with expired lease.";
                 $job->markFailed($errorMessage);
 
-                $job->trackedJob()?->markFailed(
-                    new RuntimeException("Agent job failed: {$errorMessage}")
-                );
+                try {
+                    $job->handler()->fail($job, new RuntimeException("Agent job failed: {$errorMessage}"), []);
+                } catch (Throwable $e) {
+                    report($e);
+                }
                 $failedCount++;
             }
         }
@@ -108,7 +112,7 @@ class RecoverStuckJobsCommand extends Command
 
         // A restore an agent never picked up must not run once it is reported failed.
         AgentJob::query()
-            ->where('type', AgentJob::TYPE_RESTORE)
+            ->where('type', AgentJobType::Restore)
             ->where('status', AgentJob::STATUS_PENDING)
             ->whereHas('restore', fn ($query) => $query->whereIn('backup_job_id', $stuckJobs->modelKeys()))
             ->get()

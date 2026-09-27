@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\AgentJobType;
 use App\Enums\BackupJobStatus;
 use App\Enums\SnapshotFileStatus;
 use App\Http\Middleware\ThrottleFailedAgentAuth;
@@ -212,6 +213,24 @@ describe('job acknowledgement', function () {
             ->and($backupJob->logs[0]['message'])->toBe('Starting backup for database: testdb');
     });
 
+    test('acknowledging a backup sends the success notification', function () {
+        Notification::fake();
+        \App\Models\NotificationChannel::factory()->email()->create(['config' => ['to' => 'admin@example.com']]);
+
+        ['agent' => $agent, 'token' => $token] = createAgentWithToken();
+        $agentJob = AgentJob::factory()->claimed($agent)->create();
+        $agentJob->snapshot->databaseServer->update(['notification_trigger' => 'all']);
+
+        $this->withToken($token)
+            ->postJson("/api/v1/agent/jobs/{$agentJob->id}/ack", [
+                'filename' => 'backup.sql.gz',
+                'file_size' => 12345,
+            ])
+            ->assertOk();
+
+        Notification::assertSentTimes(\App\Notifications\BackupSuccessNotification::class, 1);
+    });
+
     test('ack rejects an unsafe filename', function (string $filename) {
         // An agent is lower-trust than the central server it reports to, so the
         // filename it supplies must not reach the download path unsanitised.
@@ -376,14 +395,19 @@ describe('job failure', function () {
         Notification::assertSentTimes(\App\Notifications\BackupFailedNotification::class, 1);
     });
 
-    test('failing a discovery job marks it failed without notification or backup job impact', function () {
+    test('failing a discovery job records a failed snapshot and notifies, like a failed pre-flight', function () {
         Notification::fake();
+        \App\Models\NotificationChannel::factory()->email()->create(['config' => ['to' => 'admin@example.com']]);
 
         ['agent' => $agent, 'token' => $token] = createAgentWithToken();
-        $server = DatabaseServer::factory()->create(['agent_id' => $agent->id]);
+        $server = DatabaseServer::factory()->create([
+            'agent_id' => $agent->id,
+            'database_selection_mode' => 'all',
+        ]);
 
         $agentJob = AgentJob::factory()->discover()->claimed($agent)->create([
             'database_server_id' => $server->id,
+            'payload' => ['backup_id' => $server->backups()->first()->id, 'method' => 'scheduled'],
         ]);
 
         $this->withToken($token)
@@ -396,7 +420,12 @@ describe('job failure', function () {
         expect($agentJob->status)->toBe(AgentJob::STATUS_FAILED)
             ->and($agentJob->error_message)->toBe('Cannot connect to database');
 
-        Notification::assertNothingSent();
+        $snapshot = Snapshot::where('database_server_id', $server->id)->sole();
+        expect($snapshot->database_name)->toBe('(all databases)')
+            ->and($snapshot->method)->toBe('scheduled')
+            ->and($snapshot->job->status)->toBe(BackupJobStatus::Failed)
+            ->and($snapshot->job->error_message)->toBe('Cannot connect to database');
+        Notification::assertSentTimes(\App\Notifications\BackupFailedNotification::class, 1);
     });
 });
 
@@ -483,7 +512,7 @@ describe('discovery jobs', function () {
         expect($jobData)->not->toBeNull()
             ->and($jobData['id'])->toBe($agentJob->id)
             ->and($jobData['snapshot_id'])->toBeNull()
-            ->and($jobData['payload']['type'])->toBe('discover');
+            ->and($jobData['type'])->toBe('discover');
     });
 
     test('can report discovered databases', function () {
@@ -498,7 +527,7 @@ describe('discovery jobs', function () {
 
         $agentJob = AgentJob::factory()->discover()->claimed($agent)->create([
             'database_server_id' => $server->id,
-            'payload' => ['type' => 'discover', 'backup_id' => $backup->id],
+            'payload' => ['backup_id' => $backup->id],
         ]);
 
         $response = $this->withToken($token)
@@ -515,7 +544,7 @@ describe('discovery jobs', function () {
 
         // 3 backup agent jobs should have been created
         $backupJobs = AgentJob::where('database_server_id', $server->id)
-            ->where('type', AgentJob::TYPE_BACKUP)
+            ->where('type', AgentJobType::Backup)
             ->get();
 
         expect($backupJobs)->toHaveCount(3);
@@ -529,6 +558,24 @@ describe('discovery jobs', function () {
         expect($dbNames)->toBe(['db1', 'db2', 'db3']);
     });
 
+    test('a discovery that matches no database completes without backups', function () {
+        ['agent' => $agent, 'token' => $token] = createAgentWithToken();
+        $server = DatabaseServer::factory()->create(['agent_id' => $agent->id]);
+
+        $agentJob = AgentJob::factory()->discover()->claimed($agent)->create([
+            'database_server_id' => $server->id,
+            'payload' => ['backup_id' => $server->backups()->first()->id],
+        ]);
+
+        $this->withToken($token)
+            ->postJson("/api/v1/agent/jobs/{$agentJob->id}/discovered-databases", ['databases' => []])
+            ->assertOk()
+            ->assertJsonPath('jobs_created', 0);
+
+        expect($agentJob->fresh()->status)->toBe(AgentJob::STATUS_COMPLETED)
+            ->and(Snapshot::where('database_server_id', $server->id)->exists())->toBeFalse();
+    });
+
     test('discovered-databases rejects a discovery job whose payload has no backup_id', function () {
         ['agent' => $agent, 'token' => $token] = createAgentWithToken();
 
@@ -539,7 +586,7 @@ describe('discovery jobs', function () {
         // snapshots with an unknown parent.
         $agentJob = AgentJob::factory()->discover()->claimed($agent)->create([
             'database_server_id' => $server->id,
-            'payload' => ['type' => 'discover'],
+            'payload' => [],
         ]);
 
         $this->withToken($token)
@@ -574,7 +621,7 @@ describe('discovery jobs', function () {
 
         $agentJob = AgentJob::factory()->discover()->claimed($agent)->create([
             'database_server_id' => $server->id,
-            'payload' => ['type' => 'discover', 'backup_id' => $backup->id],
+            'payload' => ['backup_id' => $backup->id],
         ]);
 
         $this->withToken($token)
@@ -602,14 +649,35 @@ describe('job state guards', function () {
         'discovered-databases' => ['discovered-databases'],
     ]);
 
-    test('discovery jobs cannot be acknowledged', function () {
+    test('acknowledging a discovery job with its databases works like discovered-databases', function () {
         ['agent' => $agent, 'token' => $token] = createAgentWithToken();
-        $agentJob = AgentJob::factory()->discover()->claimed($agent)->create();
+        $server = DatabaseServer::factory()->create(['agent_id' => $agent->id]);
+        $agentJob = AgentJob::factory()->discover()->claimed($agent)->create([
+            'database_server_id' => $server->id,
+            'payload' => ['backup_id' => $server->backups()->first()->id],
+        ]);
 
         $this->withToken($token)
-            ->postJson("/api/v1/agent/jobs/{$agentJob->id}/ack")
-            ->assertStatus(422)
-            ->assertJsonPath('message', 'Only backup and restore jobs can be acknowledged.');
+            ->postJson("/api/v1/agent/jobs/{$agentJob->id}/ack", ['databases' => ['db1', 'db2']])
+            ->assertOk()
+            ->assertJsonPath('jobs_created', 2);
+
+        expect($agentJob->fresh()->status)->toBe(AgentJob::STATUS_COMPLETED);
+    });
+});
+
+describe('compatibility with agents up to 1.8', function () {
+    test('a discovery job still carries its type inside the payload', function () {
+        ['agent' => $agent, 'token' => $token] = createAgentWithToken();
+        $server = DatabaseServer::factory()->create(['agent_id' => $agent->id]);
+        AgentJob::factory()->discover()->create(['database_server_id' => $server->id]);
+
+        // Agents up to 1.8 claim without job_types and read payload.type.
+        $this->withToken($token)
+            ->postJson('/api/v1/agent/jobs/claim')
+            ->assertOk()
+            ->assertJsonPath('job.type', 'discover')
+            ->assertJsonPath('job.payload.type', 'discover');
     });
 });
 

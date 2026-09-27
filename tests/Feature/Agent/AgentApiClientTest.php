@@ -31,7 +31,7 @@ describe('claimJob', function () {
             ]),
         ]);
 
-        $result = $this->client->claimJob();
+        $result = $this->client->claimJob(['backup']);
 
         expect($result)->toBe(['id' => 'job-1', 'snapshot_id' => 'snap-1', 'payload' => ['test' => true]]);
     });
@@ -41,7 +41,7 @@ describe('claimJob', function () {
             'http://server.test/api/v1/agent/jobs/claim' => Http::response(['job' => null]),
         ]);
 
-        expect($this->client->claimJob())->toBeNull();
+        expect($this->client->claimJob(['backup']))->toBeNull();
     });
 
     test('returns null on failure response', function () {
@@ -49,7 +49,7 @@ describe('claimJob', function () {
             'http://server.test/api/v1/agent/jobs/claim' => Http::response('Server Error', 500),
         ]);
 
-        expect($this->client->claimJob())->toBeNull();
+        expect($this->client->claimJob(['backup']))->toBeNull();
     });
 
     test('throws authentication exception on 401/403 instead of masking it', function (int $status) {
@@ -57,7 +57,7 @@ describe('claimJob', function () {
             'http://server.test/api/v1/agent/jobs/claim' => Http::response('Unauthorized', $status),
         ]);
 
-        expect(fn () => $this->client->claimJob())->toThrow(AgentAuthenticationException::class);
+        expect(fn () => $this->client->claimJob(['backup']))->toThrow(AgentAuthenticationException::class);
     })->with([401, 403]);
 
     test('returns null when job payload is not an array', function () {
@@ -65,7 +65,7 @@ describe('claimJob', function () {
             'http://server.test/api/v1/agent/jobs/claim' => Http::response(['job' => 'unexpected-string']),
         ]);
 
-        expect($this->client->claimJob())->toBeNull();
+        expect($this->client->claimJob(['backup']))->toBeNull();
     });
 });
 
@@ -97,13 +97,18 @@ describe('jobHeartbeat', function () {
 });
 
 describe('ack', function () {
-    test('sends all fields to ack endpoint', function () {
+    test('sends the result fields flat alongside the logs', function () {
         Http::fake();
         $logs = [['timestamp' => '2026-01-01T00:00:00+00:00', 'type' => 'log', 'level' => 'success', 'message' => 'Done']];
 
         $volumeResults = [['volume_id' => 'vol-1', 'volume_name' => 'Local', 'status' => SnapshotFileStatus::Completed->value, 'error' => null, 'storage_warning' => null, 'quota_exceeded' => false]];
 
-        $this->client->ack('job-1', 'backup.sql.gz', 12345, 'sha256hash', $volumeResults, $logs);
+        $this->client->ack('job-1', [
+            'filename' => 'backup.sql.gz',
+            'file_size' => 12345,
+            'checksum' => 'sha256hash',
+            'volumes' => $volumeResults,
+        ], $logs);
 
         Http::assertSent(function ($request) {
             return $request->url() === 'http://server.test/api/v1/agent/jobs/job-1/ack'
