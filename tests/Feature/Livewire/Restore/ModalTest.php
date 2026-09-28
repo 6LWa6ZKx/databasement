@@ -501,16 +501,16 @@ test('destination step offers a database owner field whatever the snapshot prese
         ->set('ownerUser', 'webapp')
         ->assertSee('ALTER DATABASE "restored_db" OWNER TO "webapp"');
 
-    // The reassignment is announced only where it runs: a snapshot that carries
-    // its own owners restores its objects under them, leaving nothing to move.
+    // Restoring as the owner is announced only where it happens: a snapshot that
+    // carries its own owners restores its objects under them.
     if ($preservesPrivileges) {
-        $component->assertDontSee('REASSIGN OWNED BY');
+        $component->assertDontSee('SET ROLE');
     } else {
-        $component->assertSee('REASSIGN OWNED BY "databasement" TO "webapp"');
+        $component->assertSee('SET ROLE "webapp"');
     }
 })->with([
-    'snapshot preserving ownership' => [true, 'Set database owner after restore'],
-    'portable snapshot' => [false, 'Transfer database ownership to user after restore'],
+    'snapshot preserving ownership' => [true, 'Set database owner before restore'],
+    'portable snapshot' => [false, 'Transfer database ownership to user before restore'],
 ]);
 
 test('the owner of a privilege-preserving restore reaches the queued job', function () {
