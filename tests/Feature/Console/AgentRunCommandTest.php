@@ -102,6 +102,30 @@ test('processes a job and calls ack on success', function () {
     );
 });
 
+test('a backup reports its running commands to the server', function () {
+    Http::fake([
+        '*/agent/heartbeat' => Http::response(['status' => 'ok']),
+        '*/agent/jobs/claim' => Http::response(['job' => $this->jobPayload]),
+        '*/agent/jobs/job-123/heartbeat' => Http::response(['status' => 'ok']),
+        '*/agent/jobs/job-123/ack' => Http::response(['status' => 'ok']),
+    ]);
+
+    $this->mock(BackupTask::class)->shouldReceive('execute')->once()
+        ->andReturnUsing(function ($config, $logger, $onProgress, Closure $onCommandHeartbeat) {
+            $onCommandHeartbeat(true);
+            $onCommandHeartbeat(false);
+
+            return new BackupResult('backup_testdb.sql.gz', 1, 'abc123hash');
+        });
+
+    $this->artisan('agent:run --once')->assertSuccessful();
+
+    Http::assertSent(fn ($request) => str_contains($request->url(), '/jobs/job-123/heartbeat')
+        && $request['in_command'] === true);
+    Http::assertSent(fn ($request) => str_contains($request->url(), '/jobs/job-123/heartbeat')
+        && $request['in_command'] === false);
+});
+
 test('reports per-volume outcomes when only some uploads fail', function () {
     Http::fake([
         '*/agent/heartbeat' => Http::response(['status' => 'ok']),
@@ -344,6 +368,28 @@ describe('restore jobs', function () {
             && in_array('restore', $request['job_types'], true));
         Http::assertSent(fn ($request) => str_contains($request->url(), '/jobs/job-789/ack')
             && ! isset($request['filename']));
+    });
+
+    test('a restore reports its running commands to the server', function () {
+        Http::fake([
+            '*/agent/heartbeat' => Http::response(['status' => 'ok']),
+            '*/agent/jobs/claim' => Http::response(['job' => $this->restoreJob]),
+            '*/agent/jobs/job-789/heartbeat' => Http::response(['status' => 'ok']),
+            '*/agent/jobs/job-789/ack' => Http::response(['status' => 'ok']),
+        ]);
+
+        $this->mock(RestoreTask::class)->shouldReceive('execute')->once()
+            ->andReturnUsing(function ($config, $logger, $onProgress, Closure $onCommandHeartbeat) {
+                $onCommandHeartbeat(true);
+                $onCommandHeartbeat(false);
+            });
+
+        $this->artisan('agent:run --once')->assertSuccessful();
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/jobs/job-789/heartbeat')
+            && $request['in_command'] === true);
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/jobs/job-789/heartbeat')
+            && $request['in_command'] === false);
     });
 
     test('reports a failed restore', function () {
