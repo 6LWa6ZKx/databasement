@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Agent;
+use App\Models\Backup;
 use App\Models\DatabaseServer;
 use App\Models\DatabaseServerSshConfig;
 
@@ -175,4 +176,16 @@ test('buildExtraConfig folds type-specific fields into extra_config', function (
     'clears stale config on type change when no replacement keys are provided' => [
         ['database_type' => 'mysql'], ['auth_source' => 'records'], 'mongodb', null,
     ],
+]);
+
+test('parseExcludedTables normalizes separators, blanks and duplicates', function (mixed $value, array $expected) {
+    expect(Backup::parseExcludedTables($value))->toBe($expected);
+})->with([
+    'comma separated' => ['web_api_log, web_service_log', ['web_api_log', 'web_service_log']],
+    'newline separated' => ["web_api_log\nweb_service_log", ['web_api_log', 'web_service_log']],
+    'mixed separators with blanks' => [" web_api_log ,,\r\n  web_service_log \n", ['web_api_log', 'web_service_log']],
+    'duplicates collapsed' => ['audit_log, audit_log', ['audit_log']],
+    'already a list' => [['audit_log'], ['audit_log']],
+    'empty string' => ['', []],
+    'null' => [null, []],
 ]);

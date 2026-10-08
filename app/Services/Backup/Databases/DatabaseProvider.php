@@ -84,7 +84,10 @@ class DatabaseProvider
      * Host and port are passed explicitly to support SSH tunnel overrides.
      * $snapshotDumpFormat and $snapshotDumpPrivileges override the target's
      * extra_config at restore time: both are properties of the snapshot file,
-     * not the destination server.
+     * not the destination server. $excludedTables come from the backup
+     * configuration being run, so they only ever apply to a dump.
+     *
+     * @param  list<string>  $excludedTables
      */
     public function makeFromConfig(
         DatabaseConnectionConfig $config,
@@ -95,6 +98,7 @@ class DatabaseProvider
         ?string $snapshotDumpFormat = null,
         ?bool $snapshotDumpPrivileges = null,
         bool $parallelRestore = false,
+        array $excludedTables = [],
     ): DatabaseInterface {
         if ($config->databaseType === DatabaseType::SQLITE) {
             return $this->makeConfigured(DatabaseType::SQLITE, $this->sqliteConfig($databaseName, $config->sshConfig));
@@ -106,6 +110,10 @@ class DatabaseProvider
 
         if (! empty($extra['dump_flags'])) {
             $dbConfig['dump_flags'] = $extra['dump_flags'];
+        }
+
+        if ($excludedTables !== []) {
+            $dbConfig['excluded_tables'] = $excludedTables;
         }
 
         if (in_array($config->databaseType, [DatabaseType::MYSQL, DatabaseType::POSTGRESQL], true) && ! empty($extra['ssl_enabled'])) {

@@ -8,6 +8,7 @@ use App\Enums\VolumeType;
 use App\Models\Backup;
 use App\Models\DatabaseServer;
 use App\Models\Volume;
+use App\Rules\ExcludedTableNames;
 use App\Rules\MaxBytes;
 use App\Rules\SafeDatabaseName;
 use App\Rules\SafeDatabasePath;
@@ -119,6 +120,11 @@ class SaveDatabaseServerRequest extends FormRequest
                 $rules['backups.*.database_names'] = 'nullable|array';
                 $rules['backups.*.database_names.*'] = ['string', 'max:255', new SafeDatabaseName];
                 $rules['backups.*.database_include_pattern'] = 'nullable|string|max:500';
+            }
+
+            if ($databaseType?->supportsExcludedTables() ?? false) {
+                $rules['backups.*.excluded_tables'] = ['nullable', 'array', 'max:'.ExcludedTableNames::MAX_NAMES];
+                $rules['backups.*.excluded_tables.*'] = ['string', 'max:'.ExcludedTableNames::MAX_NAME_LENGTH, 'regex:'.ExcludedTableNames::PATTERN];
             }
         }
 

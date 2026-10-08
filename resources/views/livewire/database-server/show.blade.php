@@ -277,6 +277,18 @@
                                             </dd>
                                         @endif
 
+                                        @if(! empty($backup->excluded_tables))
+                                            <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-base-content/50">
+                                                <x-icon name="o-no-symbol" class="w-3.5 h-3.5" />
+                                                {{ __('Excluded') }}
+                                            </dt>
+                                            <dd class="flex flex-wrap items-center gap-1.5">
+                                                @foreach($backup->excluded_tables as $excludedTable)
+                                                    <code class="text-xs font-mono break-all px-1.5 py-0.5 rounded bg-base-200">{{ $excludedTable }}</code>
+                                                @endforeach
+                                            </dd>
+                                        @endif
+
                                         @if($summaryWhere)
                                             <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-base-content/50">
                                                 <x-icon name="o-server-stack" class="w-3.5 h-3.5" />
